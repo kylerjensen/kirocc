@@ -59,6 +59,8 @@ var effortCapabilities = map[string]effortCapability{
 	"gpt-5.6-sol":   {reasoning: true, levels: reasoningEffortLevels},
 	"gpt-5.6-terra": {reasoning: true, levels: reasoningEffortLevels},
 	"gpt-5.6-luna":  {reasoning: true, levels: reasoningEffortLevels},
+	// Auto: backend selects the model, bypasses all effort/thinking.
+	"auto":          {levels: nil},
 }
 
 // IsReasoningModel reports whether the resolved Kiro model belongs to a

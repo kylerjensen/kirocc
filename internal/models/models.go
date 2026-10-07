@@ -83,10 +83,16 @@ var modelMapOrdered = []Mapping{
 	{Anthropic: "claude-opus-4-7[1m]", Kiro: "claude-opus-4.7", Kiro1M: "claude-opus-4.7", DisplayName: "Opus 4.7"},
 	{Anthropic: "claude-opus-4-6[1m]", Kiro: "claude-opus-4.6", Kiro1M: "claude-opus-4.6", DisplayName: "Opus 4.6"},
 	{Anthropic: "claude-sonnet-5[1m]", Kiro: "claude-sonnet-5", Kiro1M: "claude-sonnet-5", DisplayName: "Sonnet 5"},
+	{Anthropic: "claude-fable-5-1[1m]", Kiro: "claude-fable-5.1", Kiro1M: "claude-fable-5.1", DisplayName: "Fable 5.1"},
+	{Anthropic: "claude-opus-5-5[1m]", Kiro: "claude-opus-5.5", Kiro1M: "claude-opus-5.5", DisplayName: "Opus 5.5"},
+	{Anthropic: "claude-sonnet-5-5[1m]", Kiro: "claude-sonnet-5.5", Kiro1M: "claude-sonnet-5.5", DisplayName: "Sonnet 5.5"},
 	{Anthropic: "claude-opus-5", Kiro: "claude-opus-5", Kiro1M: "claude-opus-5"},
 	{Anthropic: "claude-opus-4-8", Kiro: "claude-opus-4.8", Kiro1M: "claude-opus-4.8"},
 	{Anthropic: "claude-opus-4-7", Kiro: "claude-opus-4.7", Kiro1M: "claude-opus-4.7"},
 	{Anthropic: "claude-sonnet-5", Kiro: "claude-sonnet-5", Kiro1M: "claude-sonnet-5"},
+	{Anthropic: "claude-fable-5-1", Kiro: "claude-fable-5.1", Kiro1M: "claude-fable-5.1"},
+	{Anthropic: "claude-opus-5-5", Kiro: "claude-opus-5.5", Kiro1M: "claude-opus-5.5"},
+	{Anthropic: "claude-sonnet-5-5", Kiro: "claude-sonnet-5.5", Kiro1M: "claude-sonnet-5.5"},
 	{Anthropic: "claude-sonnet-4-6", Kiro: "claude-sonnet-4.6", Kiro1M: "claude-sonnet-4.6-1m", DisplayName: "Sonnet 4.6"},
 	// No DisplayName, so this legacy row stays out of the picker (and gets no
 	// `[1m]` entry) even though it has a 1M SKU. Deliberate: give it a display
@@ -203,12 +209,6 @@ func effectiveMappings() []Mapping {
 // Upstream `kiroModel` is never `[1m]`-suffixed — it always comes from
 // mapping tables. KIROCC_MODEL_MAPPINGS env var can override mappings.
 func Resolve(model string, context1M bool) (kiroModel string, thinking bool, contextWindowSize int, anthropicModel string) {
-	// Auto passes `auto` through to the Kiro backend and bypasses
-	// thinking/effort resolution.
-	if model == "auto" || model == "claude-auto" {
-		return "auto", false, 0, model
-	}
-
 	model = normalizeThinkingSuffix(model)
 
 	var matchedWindowSize int
@@ -274,6 +274,12 @@ func Resolve(model string, context1M bool) (kiroModel string, thinking bool, con
 		}
 	} else {
 		anthropicModel = matchedAnthropic
+	}
+
+	// Apply Auto semantics to the resolved SKU so explicit mappings retain
+	// precedence. Auto aliases cannot opt into thinking or a fixed 1M window.
+	if kiroModel == "auto" {
+		return "auto", false, 0, strings.TrimSuffix(model, ThinkingSuffix)
 	}
 
 	// Route to the mapping's 1M SKU when any signal asked for it: the

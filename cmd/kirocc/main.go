@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/d-kuro/kirocc/internal/server"
 	"github.com/d-kuro/kirocc/internal/tokencount"
 	"github.com/d-kuro/kirocc/internal/tracing"
+	"github.com/d-kuro/kirocc/internal/websearch"
 )
 
 func main() {
@@ -73,8 +75,18 @@ func run(ctx context.Context, args []string) error {
 	if cfg.KiroAPIRegion != "" {
 		slog.Info("Kiro API region pinned", "region", cfg.KiroAPIRegion)
 	}
+	// Built before the listener so a bad provider or missing key is a startup
+	// error rather than a failed search mid-session.
+	webSearch, err := websearch.New(cfg.WebSearch)
+	if err != nil {
+		return fmt.Errorf("web search: %w", err)
+	}
+	if webSearch != nil {
+		slog.Info("web search enabled", "provider", webSearch.Name(), "max_results", cfg.WebSearch.MaxResults)
+	}
+
 	kiroClient := buildKiroClient(authMgr, cfg)
-	srv := buildServer(authMgr, kiroClient, cfg)
+	srv := buildServer(authMgr, kiroClient, cfg, webSearch)
 
 	if cfg.ModelDiscovery {
 		go discoverModels(ctx, authMgr, cfg.KiroAPIRegion)
@@ -120,11 +132,20 @@ func parseFlags(args []string) (config.Config, error) {
 	fs.StringVar(&cfg.KiroAPIKey, "kiro-api-key", "", "Kiro API key (ksk_...) to use instead of the kiro-cli database credential; also KIRO_API_KEY")
 	fs.StringVar(&cfg.KiroAPIRegion, "kiro-api-region", "", "region for Kiro API endpoints (runtime.<region>.kiro.dev); overrides the credential's region; also KIRO_API_REGION")
 	fs.BoolVar(&cfg.ModelDiscovery, "model-discovery", true, "fetch Kiro's model catalog at startup so new models resolve without a kirocc update; also KIROCC_MODEL_DISCOVERY")
+	fs.StringVar(&cfg.WebSearch.Provider, "web-search-provider", "",
+		"run Claude Code's WebSearch in-proxy via this search API ("+strings.Join(websearch.Providers, "|")+"); empty disables it; also KIROCC_WEB_SEARCH_PROVIDER")
+	fs.StringVar(&cfg.WebSearch.APIKey, "web-search-api-key", "",
+		"API key for -web-search-provider; also KIROCC_WEB_SEARCH_API_KEY")
+	fs.StringVar(&cfg.WebSearch.URL, "web-search-url", "",
+		"endpoint for -web-search-provider custom: POST {\"q\":…} answering {\"results\":[…]}; also KIROCC_WEB_SEARCH_URL")
+	fs.IntVar(&cfg.WebSearch.MaxResults, "web-search-max-results", websearch.DefaultMaxResults,
+		"results per search; also KIROCC_WEB_SEARCH_MAX_RESULTS")
 	fs.BoolVar(&cfg.Debug, "debug", false, "enable debug logging with OTel JSON Lines output")
 	fs.BoolVar(&cfg.OTel, "otel", false, "enable OpenTelemetry tracing (OTLP HTTP exporter)")
 	fs.IntVar(&cfg.OTelBodyLimit, "otel-body-limit", config.DefaultOTelBodyLimit, "max bytes of request body to capture in OTel spans (0 = unlimited)")
 	fs.Int64Var(&cfg.MaxRequestBody, "max-request-body", config.DefaultMaxRequestBody, "max bytes of a client request body (0 = unlimited); also KIROCC_MAX_REQUEST_BODY")
 	fs.DurationVar(&cfg.KeepAliveInterval, "keepalive-interval", config.DefaultKeepAliveInterval, "SSE idle keep-alive interval (0 = disabled)")
+	fs.DurationVar(&cfg.ResponseHeaderTimeout, "response-header-timeout", kiroclient.DefaultResponseHeaderTimeout, "max wait for Kiro response headers (0 = no limit); also KIROCC_RESPONSE_HEADER_TIMEOUT")
 	fs.StringVar(&cfg.LogFile.Path, "log-file", "", "write logs to file with rotation (for agent debugging)")
 	fs.IntVar(&cfg.LogFile.MaxSize, "log-max-size", logging.DefaultLogMaxSize, "max log file size in MB before rotation")
 	fs.IntVar(&cfg.LogFile.MaxBackups, "log-max-backups", logging.DefaultLogMaxBackups, "max number of old log files to retain")
@@ -157,6 +178,7 @@ func buildKiroClient(authMgr *auth.AuthManager, cfg config.Config) kiroclient.Cl
 	if cfg.KiroAPIRegion != "" {
 		clientOpts = append(clientOpts, kiroclient.WithRegion(cfg.KiroAPIRegion))
 	}
+	clientOpts = append(clientOpts, kiroclient.WithResponseHeaderTimeout(cfg.ResponseHeaderTimeout))
 	if cfg.OTel {
 		clientOpts = append(clientOpts, kiroclient.WithOTel(cfg.OTelBodyLimit))
 	}
@@ -219,10 +241,13 @@ func discoverModels(ctx context.Context, authMgr *auth.AuthManager, regionOverri
 		"region", region, "advertised", len(catalog), "new_models", added)
 }
 
-func buildServer(authMgr *auth.AuthManager, client kiroclient.Client, cfg config.Config) *server.Server {
+func buildServer(authMgr *auth.AuthManager, client kiroclient.Client, cfg config.Config, webSearch websearch.Provider) *server.Server {
 	opts := []server.ServerOption{
 		server.WithKeepAliveInterval(cfg.KeepAliveInterval),
 		server.WithMaxRequestBody(cfg.MaxRequestBody),
+	}
+	if webSearch != nil {
+		opts = append(opts, server.WithWebSearch(webSearch, cfg.WebSearch.MaxResults))
 	}
 	if cfg.OTel {
 		opts = append(opts, server.WithOTel(cfg.OTelBodyLimit))

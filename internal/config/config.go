@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/d-kuro/kirocc/internal/logging"
+	"github.com/d-kuro/kirocc/internal/websearch"
 )
 
 const (
@@ -48,12 +49,20 @@ type Config struct {
 	OTel              bool
 	OTelBodyLimit     int
 	KeepAliveInterval time.Duration
+	// ResponseHeaderTimeout bounds the wait for upstream response headers. Kiro
+	// sends headers only once the model starts, so a large prompt can sit here
+	// for a while; a stall past it is retried.
+	ResponseHeaderTimeout time.Duration
 	// MaxRequestBody caps the client request body in bytes. A conversation is
 	// re-sent in full on every turn, so images and long histories push this up
 	// over a session; too low a cap wedges a client permanently, since every
 	// retry sends the same oversized body. 0 means unlimited.
 	MaxRequestBody int64
 	LogFile        logging.LogFileConfig
+	// WebSearch configures in-proxy emulation of Anthropic's web_search tool.
+	// Disabled unless a provider is named: the queries leave this machine for a
+	// third-party search API, so it is opt-in.
+	WebSearch websearch.Config
 }
 
 // regionPattern matches the region forms Kiro uses ("us-east-1",
@@ -124,6 +133,18 @@ func ApplyEnvOverrides(cfg *Config) error {
 	if err := applyDuration("KIROCC_KEEPALIVE_INTERVAL", &cfg.KeepAliveInterval); err != nil {
 		return err
 	}
+	if err := applyDuration("KIROCC_RESPONSE_HEADER_TIMEOUT", &cfg.ResponseHeaderTimeout); err != nil {
+		return err
+	}
+	applyString("KIROCC_WEB_SEARCH_PROVIDER", &cfg.WebSearch.Provider)
+	applyString("KIROCC_WEB_SEARCH_API_KEY", &cfg.WebSearch.APIKey)
+	applyString("KIROCC_WEB_SEARCH_URL", &cfg.WebSearch.URL)
+	if err := applyInt("KIROCC_WEB_SEARCH_MAX_RESULTS", &cfg.WebSearch.MaxResults); err != nil {
+		return err
+	}
+	if err := applyDuration("KIROCC_WEB_SEARCH_TIMEOUT", &cfg.WebSearch.Timeout); err != nil {
+		return err
+	}
 	applyString("KIROCC_LOG_FILE", &cfg.LogFile.Path)
 	if err := applyInt("KIROCC_LOG_MAX_SIZE", &cfg.LogFile.MaxSize); err != nil {
 		return err
@@ -162,10 +183,16 @@ func (c *Config) Validate() error {
 	if c.KeepAliveInterval != 0 && c.KeepAliveInterval < time.Second {
 		return fmt.Errorf("keepalive-interval must be 0 or >= 1s, got %s", c.KeepAliveInterval)
 	}
+	if c.ResponseHeaderTimeout != 0 && c.ResponseHeaderTimeout < time.Second {
+		return fmt.Errorf("response-header-timeout must be 0 or >= 1s, got %s", c.ResponseHeaderTimeout)
+	}
 	if c.KiroAPIRegion != "" {
 		if len(c.KiroAPIRegion) > maxRegionLen || !regionPattern.MatchString(c.KiroAPIRegion) {
 			return fmt.Errorf("kiro-api-region must be a lowercase region like us-east-1, got %q", c.KiroAPIRegion)
 		}
+	}
+	if err := c.WebSearch.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

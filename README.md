@@ -16,6 +16,7 @@ Just set `ANTHROPIC_BASE_URL` from any Anthropic API client (e.g., Claude Code) 
 - **Custom API region** — Pin the region in `runtime.<region>.kiro.dev` with `-kiro-api-region`, for accounts whose stored credential region is not one Kiro serves
 - **Extended Thinking** — Enable via the `[1m]` suffix, the `thinking` field, or `output_config.effort`. Reasoning depth travels natively as `additionalModelRequestFields.output_config.effort` (validated against each model's enum; defaults to `medium` for effort-capable models when thinking is on without an explicit effort)
 - **Tool Search** — Proxy-side implementation of Anthropic's [Tool Search Tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool). Supports `tool_search_tool_regex_20251119` and `tool_search_tool_bm25_20251119` with `defer_loading` for on-demand tool discovery
+- **Web Search** — Opt-in proxy-side implementation of Anthropic's [web search tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool) (`web_search_20250305`), which Claude Code's `WebSearch` uses. Kiro has no web search, so the search runs here against Brave, Tavily, Exa or your own endpoint (`-web-search-provider`). Without a provider a request carrying the tool is refused rather than answered without the search
 - **Prompt Caching** — Converts Anthropic tool-level `cache_control` to Kiro `cachePoint`
 - **Truncation detection** — Automatically injects a notice into the next request when a response is truncated
 - **Retry** — Exponential backoff retry for 403 (token expiry), 429, and 5xx errors. Also retries thinking-only (empty visible) responses
@@ -101,25 +102,30 @@ API keys are available for Kiro Pro, Pro+, Pro Max, and Power subscribers. On gr
 
 ### Command-line options
 
-| Flag                  | Default                   | Description                                                         |
-| --------------------- | ------------------------- | ------------------------------------------------------------------- |
-| `-port`               | `3456`                    | Listen port                                                         |
-| `-host`               | `127.0.0.1`               | Bind host                                                           |
-| `-db`                 | (OS-dependent, see below) | Kiro CLI SQLite DB path                                             |
-| `-api-key`            | (none)                    | API key required to access the proxy                                |
-| `-kiro-api-key`       | (none)                    | Kiro API key (`ksk_…`) to use instead of the Kiro CLI DB credential |
-| `-kiro-api-region`    | (credential's region)     | Region for Kiro API endpoints (`runtime.<region>.kiro.dev`)         |
-| `-model-discovery`    | `true`                    | Fetch Kiro's model catalog at startup                               |
-| `-keepalive-interval` | `15s`                     | SSE idle keep-alive interval (0 = disabled)                         |
-| `-debug`              | `false`                   | Enable debug logging                                                |
-| `-log-file`           | (none)                    | Write logs to file with rotation (file-only by default)             |
-| `-log-max-size`       | `10`                      | Max log file size in MB before rotation                             |
-| `-log-max-backups`    | `5`                       | Max number of old log files to retain                               |
-| `-log-max-age`        | `7`                       | Max days to retain old log files                                    |
-| `-log-compress`       | `false`                   | Compress rotated log files with gzip                                |
-| `-log-console`        | `false`                   | Also write logs to console when `-log-file` is set                  |
-| `-otel`               | `false`                   | Enable OpenTelemetry tracing (OTLP HTTP exporter)                   |
-| `-otel-body-limit`    | `32768`                   | Max bytes of request body to capture in OTel spans (0 = unlimited)  |
+| Flag                       | Default                   | Description                                                                                      |
+| -------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `-port`                    | `3456`                    | Listen port                                                                                      |
+| `-host`                    | `127.0.0.1`               | Bind host                                                                                        |
+| `-db`                      | (OS-dependent, see below) | Kiro CLI SQLite DB path                                                                          |
+| `-api-key`                 | (none)                    | API key required to access the proxy                                                             |
+| `-kiro-api-key`            | (none)                    | Kiro API key (`ksk_…`) to use instead of the Kiro CLI DB credential                              |
+| `-kiro-api-region`         | (credential's region)     | Region for Kiro API endpoints (`runtime.<region>.kiro.dev`)                                      |
+| `-model-discovery`         | `true`                    | Fetch Kiro's model catalog at startup                                                            |
+| `-keepalive-interval`      | `15s`                     | SSE idle keep-alive interval (0 = disabled)                                                      |
+| `-response-header-timeout` | `30s`                     | Max wait for Kiro response headers (0 = no limit, otherwise >= 1s)                               |
+| `-web-search-provider`     | (none)                    | Run `web_search_20250305` proxy-side via `brave`, `tavily`, `exa` or `custom`; empty disables it |
+| `-web-search-api-key`      | (none)                    | API key for the search provider                                                                  |
+| `-web-search-url`          | (none)                    | Endpoint for `-web-search-provider custom`                                                       |
+| `-web-search-max-results`  | `5`                       | Results per search                                                                               |
+| `-debug`                   | `false`                   | Enable debug logging                                                                             |
+| `-log-file`                | (none)                    | Write logs to file with rotation (file-only by default)                                          |
+| `-log-max-size`            | `10`                      | Max log file size in MB before rotation                                                          |
+| `-log-max-backups`         | `5`                       | Max number of old log files to retain                                                            |
+| `-log-max-age`             | `7`                       | Max days to retain old log files                                                                 |
+| `-log-compress`            | `false`                   | Compress rotated log files with gzip                                                             |
+| `-log-console`             | `false`                   | Also write logs to console when `-log-file` is set                                               |
+| `-otel`                    | `false`                   | Enable OpenTelemetry tracing (OTLP HTTP exporter)                                                |
+| `-otel-body-limit`         | `32768`                   | Max bytes of request body to capture in OTel spans (0 = unlimited)                               |
 
 #### Default DB path
 
@@ -133,25 +139,30 @@ API keys are available for Kiro Pro, Pro+, Pro Max, and Power subscribers. On gr
 
 Command-line options can be overridden with environment variables.
 
-| Variable                    | Corresponding option  |
-| --------------------------- | --------------------- |
-| `KIROCC_PORT`               | `-port`               |
-| `KIROCC_HOST`               | `-host`               |
-| `KIROCC_DB_PATH`            | `-db`                 |
-| `KIROCC_API_KEY`            | `-api-key`            |
-| `KIRO_API_KEY`              | `-kiro-api-key`       |
-| `KIRO_API_REGION`           | `-kiro-api-region`    |
-| `KIROCC_MODEL_DISCOVERY`    | `-model-discovery`    |
-| `KIROCC_KEEPALIVE_INTERVAL` | `-keepalive-interval` |
-| `KIROCC_DEBUG`              | `-debug`              |
-| `KIROCC_LOG_FILE`           | `-log-file`           |
-| `KIROCC_LOG_MAX_SIZE`       | `-log-max-size`       |
-| `KIROCC_LOG_MAX_BACKUPS`    | `-log-max-backups`    |
-| `KIROCC_LOG_MAX_AGE`        | `-log-max-age`        |
-| `KIROCC_LOG_COMPRESS`       | `-log-compress`       |
-| `KIROCC_LOG_CONSOLE`        | `-log-console`        |
-| `KIROCC_OTEL`               | `-otel`               |
-| `KIROCC_OTEL_BODY_LIMIT`    | `-otel-body-limit`    |
+| Variable                         | Corresponding option       |
+| -------------------------------- | -------------------------- |
+| `KIROCC_PORT`                    | `-port`                    |
+| `KIROCC_HOST`                    | `-host`                    |
+| `KIROCC_DB_PATH`                 | `-db`                      |
+| `KIROCC_API_KEY`                 | `-api-key`                 |
+| `KIRO_API_KEY`                   | `-kiro-api-key`            |
+| `KIRO_API_REGION`                | `-kiro-api-region`         |
+| `KIROCC_MODEL_DISCOVERY`         | `-model-discovery`         |
+| `KIROCC_KEEPALIVE_INTERVAL`      | `-keepalive-interval`      |
+| `KIROCC_RESPONSE_HEADER_TIMEOUT` | `-response-header-timeout` |
+| `KIROCC_WEB_SEARCH_PROVIDER`     | `-web-search-provider`     |
+| `KIROCC_WEB_SEARCH_API_KEY`      | `-web-search-api-key`      |
+| `KIROCC_WEB_SEARCH_URL`          | `-web-search-url`          |
+| `KIROCC_WEB_SEARCH_MAX_RESULTS`  | `-web-search-max-results`  |
+| `KIROCC_DEBUG`                   | `-debug`                   |
+| `KIROCC_LOG_FILE`                | `-log-file`                |
+| `KIROCC_LOG_MAX_SIZE`            | `-log-max-size`            |
+| `KIROCC_LOG_MAX_BACKUPS`         | `-log-max-backups`         |
+| `KIROCC_LOG_MAX_AGE`             | `-log-max-age`             |
+| `KIROCC_LOG_COMPRESS`            | `-log-compress`            |
+| `KIROCC_LOG_CONSOLE`             | `-log-console`             |
+| `KIROCC_OTEL`                    | `-otel`                    |
+| `KIROCC_OTEL_BODY_LIMIT`         | `-otel-body-limit`         |
 
 `KIRO_API_KEY` and `KIRO_API_REGION` intentionally keep Kiro's own names rather than the `KIROCC_` prefix, so a machine already configured for headless kiro-cli needs no kirocc-specific setup.
 
@@ -317,7 +328,7 @@ Thinking is enabled by either of:
 
 An `Anthropic-Beta` header containing `context-1m` (e.g., `context-1m-2025-08-07`) is a pure context-window signal, matching Anthropic's long-context beta semantics: it routes the request to the model's 1M SKU but does **not** enable thinking. Claude Code sends this header automatically whenever the session model carries `[1m]`, so coupling it to thinking would force thinking on for every 1M session.
 
-Exception: the `[1m]` suffix on an **always-1M** model (`claude-opus-5[1m]` / `claude-opus-4-8[1m]` / `claude-opus-4-7[1m]` / `claude-opus-4-6[1m]` / `claude-sonnet-5[1m]`) is a first-class alias that only advertises the 1M context window — it does **not** enable thinking either (see [Model mappings](#model-mappings)). Thinking on those models is opt-in via the `thinking` field.
+Exception: the `[1m]` suffix on an **always-1M** model (`claude-opus-5-5[1m]` / `claude-opus-5[1m]` / `claude-opus-4-8[1m]` / `claude-opus-4-7[1m]` / `claude-opus-4-6[1m]` / `claude-sonnet-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`) is a first-class alias that only advertises the 1M context window — it does **not** enable thinking either (see [Model mappings](#model-mappings)). Thinking on those models is opt-in via the `thinking` field.
 
 The suffix is matched case-insensitively because Claude Code may emit `[1M]`
 from internal call paths. Responses always use the canonical lowercase `[1m]`.
@@ -330,7 +341,7 @@ The reasoning effort sent to the backend is resolved as follows:
 
 Per-model allowed effort levels:
 
-- `claude-opus-5`, `claude-opus-4.8`, `claude-opus-4.7`, `claude-sonnet-5`: `low`, `medium`, `high`, `xhigh`, `max`
+- `claude-opus-5.5`, `claude-sonnet-5.5`, `claude-opus-5`, `claude-opus-4.8`, `claude-opus-4.7`, `claude-sonnet-5`, `claude-fable-5.1`: `low`, `medium`, `high`, `xhigh`, `max`
 - `claude-opus-4.6`, `claude-sonnet-4.6` (and their `-1m` variants): `low`, `medium`, `high`, `max` (no `xhigh`; clamps to `max`)
 - Models not listed here fall back to the enum advertised by [model discovery](#automatic-model-discovery), if any
 - All other models omit `additionalModelRequestFields` entirely
@@ -401,6 +412,35 @@ Supported query forms:
 - `select:Read,Edit,Grep` — exact tool selection by name
 - `read file` — keyword search (regex with word-level OR fallback, or BM25 scoring)
 
+### Web Search
+
+The Kiro backend has no web search, and Claude Code's `WebSearch` is a _server-side_ tool: it sends a side query carrying `tools:[{"type":"web_search_20250305"}]` with `tool_choice` forced to it, and expects whoever answers `/v1/messages` to run the search and reply with `server_tool_use` + `web_search_tool_result` blocks. Forwarding that definition to Kiro as an ordinary function tool returns a plain `tool_use` block instead, which the client discards — so the search reports **zero results with no error**, after billing the request.
+
+kirocc runs the search itself, structured like Tool Search above:
+
+1. Client sends a `web_search_20250305` definition (optionally with `max_uses`, `allowed_domains`, `blocked_domains`)
+2. Proxy filters it out of the tools Kiro sees and injects a `web_search` tool with a real `query` parameter — a server-side definition carries no `input_schema`, so passing it through leaves the model calling the tool with an empty input and the query never arrives
+3. When the model calls `web_search`, the proxy intercepts the tool_use:
+   - Runs the query against the configured provider, applying the definition's domain filters to the results as well as passing them to providers that support them
+   - Emits `server_tool_use` + `web_search_tool_result` SSE events to the client
+   - Feeds the results back as a tool result and calls Kiro again so the model can answer from them
+4. Failures come back as `web_search_tool_result_error` (`too_many_requests`, `query_too_long`, `invalid_tool_input`, `max_uses_exceeded`, `unavailable`) rather than failing the request
+
+```bash
+kirocc -web-search-provider tavily -web-search-api-key "$TAVILY_API_KEY"
+```
+
+| Provider | Endpoint               | Auth header                               |
+| -------- | ---------------------- | ----------------------------------------- |
+| `brave`  | `api.search.brave.com` | `X-Subscription-Token`                    |
+| `tavily` | `api.tavily.com`       | `Authorization: Bearer`                   |
+| `exa`    | `api.exa.ai`           | `x-api-key`                               |
+| `custom` | `-web-search-url`      | `Authorization: Bearer` when a key is set |
+
+The `custom` provider posts `{"q": "…", "max_results": n}` and reads `{"results": [{"title", "url", "snippet"|"content"|"description", "page_age"|"age"}]}`, so an endpoint written for Claude Desktop's built-in web search server works unchanged.
+
+Queries leave the machine for a third-party API, so the feature is off unless a provider is named. With none configured, a request carrying the tool is refused with a 400 naming the flag — the failure is visible instead of silent. Clients can also drop the tool instead: `claude --disallowedTools WebSearch`.
+
 ### Model mappings
 
 | Input model             | Kiro model             | Context window |
@@ -409,6 +449,12 @@ Supported query forms:
 | `claude-opus-5[1m]`     | `claude-opus-5`        | 1M             |
 | `claude-sonnet-5`       | `claude-sonnet-5`      | 1M             |
 | `claude-sonnet-5[1m]`   | `claude-sonnet-5`      | 1M             |
+| `claude-fable-5-1`      | `claude-fable-5.1`     | 1M             |
+| `claude-fable-5-1[1m]`  | `claude-fable-5.1`     | 1M             |
+| `claude-opus-5-5`       | `claude-opus-5.5`      | 1M             |
+| `claude-opus-5-5[1m]`   | `claude-opus-5.5`      | 1M             |
+| `claude-sonnet-5-5`     | `claude-sonnet-5.5`    | 1M             |
+| `claude-sonnet-5-5[1m]` | `claude-sonnet-5.5`    | 1M             |
 | `claude-sonnet-4-6`     | `claude-sonnet-4.6`    | 200k           |
 | `claude-sonnet-4-6[1m]` | `claude-sonnet-4.6-1m` | 1M             |
 | `claude-sonnet-4.5`     | `claude-sonnet-4.5`    | 200k           |
@@ -428,7 +474,7 @@ Supported query forms:
 | `claude-gpt-5.6-terra`  | `gpt-5.6-terra`        | 272k           |
 | `claude-gpt-5.6-luna`   | `gpt-5.6-luna`         | 272k           |
 
-Opus 5, Opus 4.6, 4.7, 4.8, and Sonnet 5 always use 1M context (no 200k SKU exists upstream). Unlike Sonnet 4.6, `claude-opus-5` and `claude-sonnet-5` have no separate `-1m` SKU: each single SKU is always 1M. The explicit `[1m]`-suffixed aliases (`claude-opus-5[1m]` / `claude-opus-4-8[1m]` / `claude-opus-4-7[1m]` / `claude-opus-4-6[1m]` / `claude-sonnet-5[1m]`) are first-class entries that preserve the suffix verbatim in the response `model` field and do **not** enable extended thinking. On these always-1M models, thinking is opt-in via the `thinking` field; the `[1m]` suffix remains a thinking opt-in for models without a first-class always-1M alias.
+Opus 5.5, Sonnet 5.5, Opus 5, Opus 4.6, 4.7, 4.8, Sonnet 5, and Fable 5.1 always use 1M context (no 200k SKU exists upstream). Unlike Sonnet 4.6, `claude-opus-5.5`, `claude-sonnet-5.5`, `claude-opus-5`, `claude-sonnet-5`, and `claude-fable-5.1` have no separate `-1m` SKU: each single SKU is always 1M. The explicit `[1m]`-suffixed aliases (`claude-opus-5-5[1m]` / `claude-opus-5[1m]` / `claude-opus-4-8[1m]` / `claude-opus-4-7[1m]` / `claude-opus-4-6[1m]` / `claude-sonnet-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`) are first-class entries that preserve the suffix verbatim in the response `model` field and do **not** enable extended thinking. On these always-1M models, thinking is opt-in via the `thinking` field; the `[1m]` suffix remains a thinking opt-in for models without a first-class always-1M alias.
 
 Unmatched `claude-*` models are passed through as-is. Non-claude models fall back to `claude-sonnet-4.6` (the `gpt-5.6-*` IDs and their `claude-gpt-5.6-*` discovery aliases above are explicit entries and do not fall back).
 
